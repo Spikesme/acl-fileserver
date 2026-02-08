@@ -1,0 +1,220 @@
+﻿<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>NTFS Berechtigungs-Viewer – Mit Details</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+    <style>
+        body {
+            font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif;
+            margin: 30px;
+            background: #f8f9fa;
+            color: #2c3e50;
+        }
+        h1 { color: #2c3e50; }
+        #instructions, #status {
+            margin: 15px 0;
+            padding: 12px;
+            border-radius: 6px;
+        }
+        #instructions { background: #e3f2fd; border: 1px solid #90caf9; }
+        #status { font-weight: bold; }
+        .success { color: #2e7d32; background: #e8f5e9; }
+        .error   { color: #c62828; background: #ffebee; }
+        input[type="file"] { margin: 15px 0; padding: 8px; }
+        table { margin-top: 20px; }
+
+        /* Wichtig: Details-Spalte breiter und klar sichtbar machen */
+        td.details-control {
+            width: 40px !important;
+            min-width: 40px !important;
+            text-align: center;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #0066cc;
+            background-color: #f1f3f5;
+            vertical-align: middle;
+        }
+
+        tr.shown td.details-control {
+            color: #cc0000;
+        }
+
+        .explicit { background-color: #fff3cd !important; font-weight: bold; }
+        .deny     { background-color: #f8d7da !important; }
+        .allow    { background-color: #e8f5e9 !important; }
+        .folder   { font-weight: bold; }
+        tr:hover  { background-color: #f1f3f5; }
+
+        .child-table { width: 100%; margin: 10px 0; }
+        .child-table th { background: #f0f4f8; font-size: 0.9em; }
+        .child-table td { font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <h1>NTFS Berechtigungs-Viewer (lokale JSON mit Details)</h1>
+
+    <div id="instructions">
+        <strong>Anleitung:</strong><br>
+        Wähle deine exportierte JSON-Datei aus.<br>
+        Klicke auf das <strong>+</strong> in der ersten Spalte, um die detaillierten Berechtigungen zu sehen.
+    </div>
+
+    <input type="file" id="jsonFileInput" accept=".json,.txt" />
+
+    <div id="status">Warte auf Dateiauswahl …</div>
+
+    <table id="aclTable" class="display compact" style="display:none;">
+        <thead>
+            <tr>
+                <th></th> <!-- Details-Control -->
+                <th>Relativer Pfad</th>
+                <th>Typ</th>
+                <th>Owner</th>
+                <th>Explizite Regeln</th>
+                <th>Vererbte Regeln</th>
+                <th>Deny-Regeln</th>
+                <th>Gesamt</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        const fileInput = document.getElementById('jsonFileInput');
+        const statusDiv = document.getElementById('status');
+        const tableEl = document.getElementById('aclTable');
+
+        // Funktion zum Formatieren der Child-Row (Details-Tabelle)
+        function format(rowData) {
+            if (!rowData.Rules || rowData.Rules.length === 0) {
+                return '<div style="padding:10px;">Keine Berechtigungen vorhanden.</div>';
+            }
+
+            let html = '<table class="child-table"><thead><tr>' +
+                '<th>Identity (Benutzer/Gruppe)</th>' +
+                '<th>Rechte</th>' +
+                '<th>Typ</th>' +
+                '<th>Vererbt?</th>' +
+                '<th>Gilt für</th>' +
+                '</tr></thead><tbody>';
+
+            rowData.Rules.forEach(rule => {
+                const isExplicit = !rule.Inherited;
+                const isDeny = rule.Access === 'Deny';
+                const rowClass = isDeny ? 'deny' : (isExplicit ? 'explicit' : 'allow');
+
+                let appliesTo = '';
+                if (rule.InheritanceFlags === 'None' && rule.PropagationFlags === 'None') {
+                    appliesTo = 'Nur dieser Ordner';
+                } else if (rule.InheritanceFlags.includes('ContainerInherit') && rule.PropagationFlags.includes('InheritOnly')) {
+                    appliesTo = 'Nur Unterordner';
+                } else {
+                    appliesTo = `${rule.InheritanceFlags} / ${rule.PropagationFlags}`;
+                }
+
+                html += `<tr class="${rowClass}">
+                    <td>${rule.Identity}</td>
+                    <td>${rule.Rights}</td>
+                    <td>${rule.Access}</td>
+                    <td>${rule.Inherited ? 'Ja' : 'Nein (explizit)'}</td>
+                    <td>${appliesTo}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        fileInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            statusDiv.textContent = `Lade ${file.name} …`;
+            statusDiv.className = '';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (!Array.isArray(data)) throw new Error('Kein Array gefunden.');
+
+                    statusDiv.textContent = `Erfolgreich: ${data.length} Einträge`;
+                    statusDiv.className = 'success';
+                    tableEl.style.display = 'table';
+
+                    if ($.fn.DataTable.isDataTable('#aclTable')) {
+                        $('#aclTable').DataTable().destroy();
+                    }
+
+                    const dt = $('#aclTable').DataTable({
+                        data: data,
+                        columns: [
+                            {
+                                className: 'details-control',
+                                orderable: false,
+                                data: null,
+                                defaultContent: ''   // leer → CSS übernimmt das + Symbol via :empty::before
+                            },
+                            { data: 'Path' },
+                            { 
+                                data: 'Type',
+                                className: 'folder',
+                                render: d => d === 'Ordner' ? '📁 ' + d : '📄 ' + d
+                            },
+                            { data: 'Owner' },
+                            { 
+                                data: null,
+                                render: (d, t, r) => r.ExplicitCount > 0 ? r.ExplicitCount + ' (explizit)' : '0'
+                            },
+                            { data: 'InheritedCount' },
+                            { 
+                                data: 'DenyCount',
+                                render: d => d > 0 ? `Ja (${d})` : '-'
+                            },
+                            { data: 'TotalRules' }
+                        ],
+                        order: [[1, 'asc']],
+                        pageLength: 25,
+                        lengthMenu: [10, 25, 50, 100, 250, 500],
+                        dom: 'Bfrtip',
+                        buttons: ['copy', { extend: 'csv', text: 'CSV Export' }, { extend: 'excel', text: 'Excel Export' }],
+                        language: { url: '//cdn.datatables.net/plug-ins/1.13.6/i18n/de-DE.json' },
+                        rowCallback: function(row, data) {
+                            if (data.ExplicitCount > 0) $(row).addClass('explicit');
+                            if (data.DenyCount > 0) $(row).addClass('deny');
+                        }
+                    });
+
+                    // Row Details Logik
+                    $('#aclTable tbody').on('click', 'td.details-control', function () {
+                        const tr = $(this).closest('tr');
+                        const row = dt.row(tr);
+
+                        if (row.child.isShown()) {
+                            row.child.hide();
+                            tr.removeClass('shown');
+                        } else {
+                            row.child(format(row.data())).show();
+                            tr.addClass('shown');
+                        }
+                    });
+
+                } catch (err) {
+                    statusDiv.textContent = 'Fehler: ' + err.message;
+                    statusDiv.className = 'error';
+                }
+            };
+            reader.readAsText(file);
+        });
+    </script>
+
+</body>
+</html>
